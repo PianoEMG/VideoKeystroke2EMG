@@ -7,6 +7,8 @@ import librosa
 from tqdm import tqdm
 import torch.nn.functional as F
 from transformers import Wav2Vec2Processor, Wav2Vec2Model
+import matplotlib.pyplot as plt
+import mlflow
 
 def linear_interpolation(features, input_fps, output_fps, output_len=None):
     features = features.transpose(1, 2)
@@ -26,7 +28,9 @@ class Audio2EMGDataset(Dataset):
         self.audio_encoder = Wav2Vec2Model.from_pretrained('facebook/wav2vec2-base-960h')
         print(f'Cropping data into windows length={self.win_len}')
         for file in tqdm(self.file_list):
-            with open(f'./dataset/emg_data/{file}.pkl', 'rb') as f:
+            if file == 'processed':
+                continue
+            with open(f'./dataset/emg_data_filtered/{file}.pkl', 'rb') as f:
                 emg_data = pkl.load(f)
             emg_data = torch.tensor(emg_data).float()
             audio_path = f'./dataset/audio_data/{file}.wav'
@@ -56,18 +60,43 @@ class Audio2EMGDataset(Dataset):
 
     def __getitem__(self, index):
         return self.data[index]
+    
+def log_plot(batch_gt, batch_output, step, save_path, writer):
+    batch_size = len(batch_gt)  # 获取批量大小
+    fig, axes = plt.subplots(nrows=batch_size, ncols=2, figsize=(15, 2 * batch_size))
+    
+    for i, (emg_gt, emg_output) in enumerate(zip(batch_gt, batch_output)):
+        if isinstance(emg_gt, torch.Tensor):
+            emg_gt = emg_gt.cpu().numpy()
+        if isinstance(emg_output, torch.Tensor):
+            emg_output = emg_output.detach().cpu().numpy()
+        
+        # 绘制实际EMG信号
+        if batch_size == 1:
+            ax_gt = axes[0]
+            ax_output = axes[1]
+        else:
+            ax_gt = axes[i, 0]
+            ax_output = axes[i, 1]
+        
+        ax_gt.plot(emg_gt)
+        ax_gt.set_title(f'EMG Ground Truth for Sample {i+1}')
+        ax_gt.set_xlabel('Time')
+        ax_gt.set_ylabel('Amplitude')
+        ax_gt.grid(True)
 
-# # 创建数据加载器
-# def create_dataloader(batch_size, shuffle=True):
-#     dataset = Audio2EMGDataset('./data/')
-#     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
-#     return dataloader
-
-# # 示例用法
-# # data = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-# batch_size = 8
-# dataloader = create_dataloader(batch_size)
-# print(len(dataloader))
-# # 遍历数据加载器
-# for batch in dataloader:
-#     print(batch[0].shape, batch[1].shape)
+        # 绘制输出EMG信号
+        ax_output.plot(emg_output)
+        ax_output.set_title(f'EMG Output for Sample {i+1}')
+        ax_output.set_xlabel('Time')
+        ax_output.set_ylabel('Amplitude')
+        ax_output.grid(True)
+    
+    if not os.path.exists(save_path):
+        os.makedirs(save_path)
+    plt.tight_layout()
+    plt.savefig(f'{save_path}/batch_{step}.png')  # 保存图表为PNG文件
+    plt.close(fig)
+    img = plt.imread(f'{save_path}/batch_{step}.png')
+    mlflow.log_artifact(f'{save_path}/batch_{step}.png')
+    writer.add_image('EMG_signals', img.transpose((2, 0, 1)), global_step=step)

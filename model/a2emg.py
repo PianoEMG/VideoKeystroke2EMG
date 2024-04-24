@@ -37,6 +37,9 @@ def enc_dec_mask(device, dataset, T, S):
     elif dataset == "Beat":
         for i in range(T):
             mask[i, i] = 0
+    elif dataset == "EMG":
+        for i in range(T):
+            mask[i, i] = 0
     return (mask==1).to(device=device)
 
 # Periodic Positional Encoding
@@ -63,12 +66,12 @@ class Audio2EMG(nn.Module):
         super(Audio2EMG, self).__init__()
         self.device = args.device
         self.audio_feature_map = nn.Linear(768, args.feature_dim)
-        self.emg_feature_map = nn.Linear(9, args.feature_dim)
+        self.emg_feature_map = nn.Linear(8, args.feature_dim)
         self.PPE = PeriodicPositionalEncoding(args.feature_dim, period = args.period)
-        self.biased_mask = init_biased_mask(n_head = 4, max_seq_len = 1024, period=args.period).repeat(2, 1, 1)
+        self.biased_mask = init_biased_mask(n_head = 4, max_seq_len = 1024, period=args.period).repeat(args.batch_size, 1, 1)
         decoder_layer = nn.TransformerDecoderLayer(d_model=args.feature_dim, nhead=4, dim_feedforward=2*args.feature_dim, batch_first=True)
         self.transformer_decoder = nn.TransformerDecoder(decoder_layer, num_layers=3)
-        self.emg_decoder = nn.Linear(args.feature_dim, 9)
+        self.emg_decoder = nn.Linear(args.feature_dim, 8)
 
         nn.init.constant_(self.emg_decoder.weight, 0)
         nn.init.constant_(self.emg_decoder.bias, 0)
@@ -83,27 +86,67 @@ class Audio2EMG(nn.Module):
         emg_input = self.emg_feature_map(emg_input)
         emg_input = self.PPE(emg_input)
         tgt_mask = self.biased_mask[:, :emg_input.shape[1], :emg_input.shape[1]].clone().detach().to(device=self.device)
-        memory_mask = enc_dec_mask(self.device, 'Beat', emg_input.shape[1], audio_feat.shape[1])
+        memory_mask = enc_dec_mask(self.device, 'EMG', emg_input.shape[1], audio_feat.shape[1])
         # print(emg_input.shape, audio_feat.shape, tgt_mask.shape, memory_mask.shape)
         feat_out = self.transformer_decoder(emg_input, audio_feat, tgt_mask=tgt_mask, memory_mask=memory_mask)
         feat_out = self.emg_decoder(feat_out)
+        # print(feat_out.shape)
 
         loss = criterion(feat_out, emg)
 
         return loss, feat_out
     
-    def predict(self, audio):
-        frame_num = audio.shape[1]
-        audio_feat = self.audio_feature_map(audio)
+    def inference(self, audio, emg, criterion):
+        self.eval()
+        with torch.no_grad():
+            frame_num = audio.shape[1]
+            audio_feat = self.audio_feature_map(audio)
+            
+            all_emg_inputs = torch.zeros((audio.shape[0], frame_num + 1, 8), device=self.device)
+            all_emg_inputs[:, 0, :] = 1  
 
-        for i in range(frame_num):
-            if i == 0:
-                emg_input = torch.zeros_like(audio_feat[:, 0, :9]).unsqueeze(1)
-                emg_input = self.PPE(emg_input)
-            else:
-                emg_input = self.PPE(emg_input)
+            emg_input = all_emg_inputs[:, :1, :]  
+            cur_emg_input = self.emg_feature_map(emg_input)
+            cur_emg_input = self.PPE(cur_emg_input)
 
-            tgt_mask = self.biased_mask[:, :emg_input.shape[1], :emg_input.shape[1]].clone().detach().to(device=self.device)
-            memory_mask = enc_dec_mask(self.device, self.dataset, emg_input.shape[1], audio_feat.shape[1])
-            feat_out = self.transformer_decoder(emg_input, audio_feat, tgt_mask=tgt_mask, memory_mask=memory_mask)
-            feat_out = self.emg_decoder(feat_out)
+            for i in range(1, frame_num + 1):
+                tgt_mask = self.biased_mask[:, :i, :i].clone().detach().to(self.device)
+                memory_mask = enc_dec_mask(self.device, 'EMG', i, audio_feat.shape[1])
+                feat_out = self.transformer_decoder(cur_emg_input, audio_feat, tgt_mask=tgt_mask, memory_mask=memory_mask)
+                feat_out = self.emg_decoder(feat_out)
+                
+                all_emg_inputs[:, i, :] = feat_out[:, -1, :]
+            
+                cur_emg_input = self.emg_feature_map(feat_out[:, -1].unsqueeze(1))
+                cur_emg_input = self.PPE(cur_emg_input)
+
+                cur_emg_input = torch.cat((self.emg_feature_map(all_emg_inputs[:, :i, :]), cur_emg_input), dim=1)
+
+            loss = criterion(feat_out, emg)
+            return loss, feat_out
+        
+    # def inference(self, audio, emg, criterion):
+    #     self.eval()
+    #     frame_num = audio.shape[1]
+    #     audio_feat = self.audio_feature_map(audio)
+
+    #     for i in range(frame_num):
+    #         if i == 0:
+    #             emg_input = torch.ones((audio.shape[0], 1, 8)).to(self.device)#.unsqueeze(1)#.repeat(audio.shape[0], 1, 1)
+    #             cur_emg_input = self.emg_feature_map(emg_input)
+    #             cur_emg_input = self.PPE(cur_emg_input)
+    #         else:
+    #             cur_emg_input = self.emg_feature_map(emg_input)
+    #             cur_emg_input = self.PPE(cur_emg_input)
+       
+    #         tgt_mask = self.biased_mask[:, :cur_emg_input.shape[1], :cur_emg_input.shape[1]].clone().detach().to(device=self.device)
+    #         memory_mask = enc_dec_mask(self.device, 'EMG', cur_emg_input.shape[1], audio_feat.shape[1])
+    #         feat_out = self.transformer_decoder(cur_emg_input, audio_feat, tgt_mask=tgt_mask, memory_mask=memory_mask)
+    #         feat_out = self.emg_decoder(feat_out)
+
+    #         emg_input = torch.cat((emg_input, feat_out[:, -1].unsqueeze(1)), dim=1)
+
+    #         del cur_emg_input, feat_out
+
+    #     loss = criterion(feat_out, emg)
+    #     return loss, feat_out
