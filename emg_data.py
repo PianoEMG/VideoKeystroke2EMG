@@ -181,10 +181,10 @@ def run():
     y,y2,y3,y4,y5,y6,y7,y8 = filter_raw_emg(lowcut, highcut, fs, muscle1_ADM, muscle2_PB, muscle3_1DI, muscle4_2DI, muscle5_3DI, muscle6_4DI, muscle10_FD, muscle12_ED)  
 
     # plot_RawFiltered_emg(fs,t,muscle1_ADM,muscle2_PB,muscle3_1DI,muscle4_2DI,muscle5_3DI,muscle6_4DI,muscle10_FD,muscle12_ED,y,y2,y3,y4,y5,y6,y7,y8)
-    # plot_Filtered_emg(t,y,y2,y3,y4,y5,y6,y7,y8)
+    plot_Filtered_emg(t,y,y2,y3,y4,y5,y6,y7,y8)
 
-    data_path = "C:/Users/koikePiano/Desktop/UIST24/EMG+keymotion_dataset/20240410-CSL/Liu/playList/free-play"
-    process_emg(lowcut, highcut, fs, data_path)
+    # data_path = "C:/Users/koikePiano/Desktop/UIST24/EMG+keymotion_dataset/20240410-CSL/Liu/playList/free-play"
+    # process_emg(lowcut, highcut, fs, data_path)
 
     
 
